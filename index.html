@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ML Image Classifier</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .container {
+            margin-top: 20px;
+        }
+        .result-container {
+            margin-top: 20px;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            display: none;
+        }
+        .preview-image {
+            max-width: 100%;
+            max-height: 300px;
+            margin: 15px 0;
+        }
+        .loading {
+            display: none;
+            margin: 20px 0;
+        }
+        #resultsList {
+            text-align: left;
+            padding-left: 20px;
+        }
+        .result-item {
+            margin: 5px 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Image Classifier</h1>
+    
+    <div class="container">
+        <input type="file" id="imageInput" accept="image/*" style="display: none;">
+        <button id="uploadButton">Select Image</button>
+        <p>Or drag and drop an image here</p>
+        
+        <div class="loading" id="loadingIndicator">
+            Processing image...
+        </div>
+        
+        <div class="result-container" id="resultContainer">
+            <h2>Results</h2>
+            <img id="previewImage" class="preview-image">
+            <div id="resultsList"></div>
+        </div>
+    </div>
+
+    <!-- TensorFlow.js library -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.2.0/tf.min.js"></script>
+    
+    <script>
+        // Global variables
+        let model;
+        const imageInput = document.getElementById('imageInput');
+        const uploadButton = document.getElementById('uploadButton');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const resultContainer = document.getElementById('resultContainer');
+        const previewImage = document.getElementById('previewImage');
+        const resultsList = document.getElementById('resultsList');
+        
+        // Load the model when the page loads
+        async function loadModel() {
+            try {
+                // Replace with your model path
+                model = await tf.loadGraphModel('./model/model.json');
+                console.log('Model loaded successfully');
+            } catch (error) {
+                console.error('Failed to load model:', error);
+            }
+        }
+        
+        // Initialize the app
+        async function init() {
+            // Add event listeners
+            uploadButton.addEventListener('click', () => {
+                imageInput.click();
+            });
+            
+            imageInput.addEventListener('change', handleImageUpload);
+            
+            // Set up drag and drop
+            document.body.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            });
+            
+            document.body.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                
+                if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+                    processImage(e.dataTransfer.files[0]);
+                }
+            });
+            
+            // Check if we received an image from MIT App Inventor
+            const urlParams = new URLSearchParams(window.location.search);
+            const base64Image = urlParams.get('image');
+            const callbackUrl = urlParams.get('callback');
+            
+            if (base64Image) {
+                processBase64Image(base64Image, callbackUrl);
+            } else {
+                // Load the model
+                await loadModel();
+            }
+        }
+        
+        // Handle image upload from input
+        function handleImageUpload(event) {
+            const file = event.target.files[0];
+            if (file) {
+                processImage(file);
+            }
+        }
+        
+        // Process the image using the model
+        async function processImage(file) {
+            // Show loading indicator
+            loadingIndicator.style.display = 'block';
+            resultContainer.style.display = 'none';
+            
+            // Create a URL for the image
+            const imageUrl = URL.createObjectURL(file);
+            previewImage.src = imageUrl;
+            
+            try {
+                // Load the image
+                const img = new Image();
+                img.src = imageUrl;
+                
+                img.onload = async () => {
+                    // Prepare the image for the model
+                    const tensor = tf.browser.fromPixels(img)
+                        .resizeNearestNeighbor([224, 224]) // Resize to model input size
+                        .toFloat()
+                        .div(255.0) // Normalize [0,1]
+                        .expandDims();
+                    
+                    // Run inference
+                    const predictions = await model.predict(tensor);
+                    const results = await predictions.data();
+                    
+                    // Process and display results
+                    displayResults(results);
+                    
+                    // Clean up
+                    tensor.dispose();
+                    predictions.dispose();
+                    loadingIndicator.style.display = 'none';
+                    resultContainer.style.display = 'block';
+                };
+            } catch (error) {
+                console.error('Error processing image:', error);
+                loadingIndicator.style.display = 'none';
+                alert('Error processing image. Please try again.');
+            }
+        }
+        
+        // Display results on the page
+        function displayResults(results) {
+            // Clear previous results
+            resultsList.innerHTML = '';
+            
+            // Replace with your model's class names
+            const classNames = ["Cat", "Dog", "Bird", "Fish", "Other"];
+            
+            // Find top predictions
+            const topPredictions = Array.from(results)
+                .map((prob, i) => ({ probability: prob, className: classNames[i] || `Class ${i+1}` }))
+                .sort((a, b) => b.probability - a.probability)
+                .slice(0, 3); // Top 3 predictions
+            
+            // Display results
+            topPredictions.forEach(prediction => {
+                const resultItem = document.createElement('div');
+                resultItem.className = 'result-item';
+                resultItem.textContent = `${prediction.className}: ${(prediction.probability * 100).toFixed(2)}%`;
+                resultsList.appendChild(resultItem);
+            });
+            
+            // Create a result string for App Inventor
+            const resultString = topPredictions.map(p => 
+                `${p.className}:${(p.probability * 100).toFixed(2)}%`
+            ).join('|');
+            
+            // Make this result available via query parameter for MIT App Inventor
+            if (window.location.search.includes('callback=')) {
+                const urlParams = new URLSearchParams(window.location.search);
+                const callback = urlParams.get('callback');
+                window.location.href = callback + '?result=' + encodeURIComponent(resultString);
+            }
+        }
+        
+        // Special function for MIT App Inventor to call
+        window.processBase64Image = async function(base64Data, callbackUrl) {
+            loadingIndicator.style.display = 'block';
+            resultContainer.style.display = 'none';
+            
+            try {
+                // Create image from base64
+                const img = new Image();
+                img.src = 'data:image/jpeg;base64,' + base64Data;
+                
+                img.onload = async () => {
+                    // Preview the image
+                    previewImage.src = img.src;
+                    
+                    // Load the model if not already loaded
+                    if (!model) {
+                        await loadModel();
+                    }
+                    
+                    // Process for model
+                    const tensor = tf.browser.fromPixels(img)
+                        .resizeNearestNeighbor([224, 224])
+                        .toFloat()
+                        .div(255.0)
+                        .expandDims();
+                    
+                    // Run inference
+                    const predictions = await model.predict(tensor);
+                    const results = await predictions.data();
+                    
+                    // Display results
+                    displayResults(results);
+                    
+                    // Return results to App Inventor if callback provided
+                    if (callbackUrl) {
+                        const classNames = ["Cat", "Dog", "Bird", "Fish", "Other"]; // Replace with your classes
+                        const topPrediction = Array.from(results)
+                            .map((prob, i) => ({ probability: prob, className: classNames[i] || `Class ${i+1}` }))
+                            .sort((a, b) => b.probability - a.probability)[0];
+                        
+                        const resultString = `${topPrediction.className}:${(topPrediction.probability * 100).toFixed(2)}%`;
+                        window.location.href = callbackUrl + '?result=' + encodeURIComponent(resultString);
+                    }
+                    
+                    // Clean up
+                    tensor.dispose();
+                    predictions.dispose();
+                    loadingIndicator.style.display = 'none';
+                    resultContainer.style.display = 'block';
+                };
+            } catch (error) {
+                console.error('Error processing base64 image:', error);
+                loadingIndicator.style.display = 'none';
+                alert('Error processing image. Please try again.');
+            }
+        };
+        
+        // Start the app
+        init();
+    </script>
+</body>
+</html>
